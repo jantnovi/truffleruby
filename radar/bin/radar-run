@@ -1,0 +1,374 @@
+#!/usr/bin/env ruby
+
+require 'yaml'
+require 'json'
+require 'tempfile'
+
+benchmarks_files = ['benchmarks.yaml']
+rubies_files = ['rubies.yaml']
+cache_file = 'cache.json'
+report_file = 'report.html'
+time_budget = 10
+
+until ARGV.empty?
+  arg = ARGV.shift
+  case arg
+  when '--benchmarks'
+    benchmarks_files = []
+    until ARGV.empty? || ARGV.first.start_with?('-')
+      benchmarks_files.push ARGV.shift
+    end
+  when '--rubies'
+    rubies_files = []
+    until ARGV.empty? || ARGV.first.start_with?('-')
+      rubies_files.push ARGV.shift
+    end
+  when '--cache'
+    cache_file = ARGV.shift
+  when '--report'
+    report_file = ARGV.shift
+  when '--time'
+    time_budget = Float(ARGV.shift)
+  else
+    raise
+  end
+end
+
+class Benchmark
+  attr_reader :name
+
+  def initialize(name)
+    @name = name
+  end
+end
+
+class FileBenchmark < Benchmark
+  attr_reader :file
+
+  def initialize(name, file)
+    super name
+    @file = file
+  end
+
+  def yield_file
+    yield file
+  end
+end
+
+class DriverBenchmark < Benchmark
+  def initialize(name, prelude, loop_count, code)
+    super name
+    @prelude = prelude
+    @loop_count = loop_count
+    @code = code
+  end
+
+  def yield_file
+    Tempfile.create(name) do |tempfile|
+      tempfile.write "require 'radar-run'\n"
+      tempfile.write "#{@prelude}\n"
+      if @loop_count
+        code = "#{@loop_count}.times do { #{@code} }"
+      else
+        code = @code
+      end
+      tempfile.write "Radar.benchmark { #{code} }\n"
+      tempfile.close
+      yield tempfile.path
+    end
+  end
+end
+
+BENCHMARKS = []
+
+def relative_path(path)
+  #pwd = Dir.pwd
+  #pwd += '/' unless pwd.end_with?('/')
+  #if path.start_with?(pwd)
+  #  path = path[pwd.size..-1]
+  #end
+  #path
+  File.expand_path(path)
+end
+
+benchmarks_files.each do |benchmarks_file|
+  YAML.load(File.read(benchmarks_file))['benchmarks'].each do |benchmark|
+    if benchmark['driver']
+      driver = YAML.load(File.read(File.expand_path(File.join(benchmarks_file, '..', benchmark['driver']))))
+      prelude = driver['prelude']
+      loop_count = driver['loop_count']
+      driver['benchmark'].each do |name, code|
+        BENCHMARKS.push DriverBenchmark.new(name, prelude, loop_count, code)
+      end
+    elsif benchmark['file']
+      file = relative_path(File.expand_path(File.join(benchmarks_file, '..', benchmark['file'])))
+      if benchmark['benchmarks']
+        benchmark['benchmarks'].each do |name|
+          BENCHMARKS.push FileBenchmark.new(name, file)
+        end
+      else
+        name = File.basename(file, '.rb')
+        BENCHMARKS.push FileBenchmark.new(name, file)
+      end
+    else
+      raise
+    end
+  end
+end
+
+class Ruby
+  attr_reader :name
+
+  def initialize(name, command)
+    @name = name
+    @command = command
+  end
+
+  def run(file)
+    "#{@command} #{file}"
+  end
+end
+
+RUBIES = []
+
+rubies_files.each do |rubies_file|
+  YAML.load(File.read(rubies_file))['rubies'].each do |ruby|
+    name = ruby['name']
+    lib = relative_path(File.expand_path('../lib', __dir__))
+    command = "#{ruby['ruby']} #{ruby['flags']} -I#{lib} -radar"
+    RUBIES.push Ruby.new(name, command)
+  end
+end
+
+if File.exist?(cache_file)
+  RESULTS = JSON.load(File.read(cache_file))
+else
+  RESULTS = []
+end
+
+def format_time(time)
+  '%8.2fs' % time
+end
+
+def format_ips(ips)
+  if ips > 0.5 * 1_000_000
+    '%8.2f mips' % (ips/1_000_000.0)
+  elsif ips > 0.5 * 1_000
+    '%8.2f kips' % (ips/1_000.0)
+  else
+    '%8.2f  ips' % ips
+  end
+end
+
+def format_rss(rss)
+  '%6.2f GB' % (rss/1_000_000_000.0)
+end
+
+def spark_radar(*values)
+  lines = ''
+  values.each_with_index do |value, index|
+    theta = index./(values.size.to_f) * 2 * Math::PI
+    r = 50
+    x = 50 + r * Math.sin(theta)
+    y = 50 + r * Math.cos(theta)
+    lines += "<line x1='50' y1='50' x2='#{x}' y2='#{y}' stroke='#3CB4A4' />"
+  end
+  points = []
+  values.each_with_index do |value, index|
+    value = 0.1 + value * 0.8
+    theta = index./(values.size.to_f) * 2 * Math::PI
+    r = value * 50
+    x = 50 + r * Math.sin(theta)
+    y = 50 + r * Math.cos(theta)
+    points.push [x, 100 - y].join(',')
+  end
+  "<svg width='4em' height='4em' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='#D7EDE7'/>#{lines}<polygon points='#{points.join(' ')}' fill='#343D46' stroke=''/></svg>"
+end
+
+def spark_curve(values)
+  max_elapsed = values.map { |value| value['elapsed']}.max
+  max_ips = values.map { |value| value['ips']}.max
+  points = ['0,100'] + values.map { |value|
+    x = value['elapsed'] / max_elapsed * 200
+    y = 100 - value['ips'] / max_ips * 100
+    [x, y].join(',')
+  } + ['200,100']
+  "<svg width='8em' height='4em' viewBox='0 0 200 100'><polygon points='#{points.join(' ')}' fill='#343D46'/></svg>"
+end
+
+def write_report(results, report_file)
+  rubies = results.map { |result| result['ruby'] }.uniq
+  reference_ruby = 'ref' # rubies.first
+  benchmarks = results.map { |result| result['benchmark'] }.uniq
+  summaries = []
+  
+  benchmarks.each do |benchmark|
+    reference_results = results.find { |result| result['benchmark'] == benchmark && result['ruby'] == reference_ruby }['samples']
+    
+    reference_ips = reference_results.map { |result| result['ips'] }.max
+    rubies.each do |ruby|
+      x = results.find { |result| result['benchmark'] == benchmark && result['ruby'] == ruby }
+      next unless x
+      ruby_results = x['samples']
+
+      last_elapsed = 0
+      ruby_results.each do |result|
+        result['duration'] = result['elapsed'] - last_elapsed
+        last_elapsed = result['elapsed']
+      end
+      ruby_results.each do |result|
+        result['iterations'] = result['ips'] * result['duration']
+      end
+      start = ruby_results.first['elapsed']
+      max_ips = ruby_results.map { |result| result['ips'] }.max
+      if max_ips > reference_ips
+        win_i = ruby_results.take_while { |result| result['ips'] <= reference_ips }.map { |result| result['iterations'] }.sum
+        win_t = ruby_results.find { |result| result['ips'] > reference_ips }['elapsed']
+      else
+        win_i = nil
+        win_t = nil
+      end
+      cold_results = ruby_results.take_while { |result| result['ips'] < 0.9 * max_ips }
+      wasted = cold_results.map { |result|
+        time = result['duration']
+        actual_iterations = result['iterations']
+        possible_iterations = max_ips * time
+        possible_iterations - actual_iterations
+      }.sum
+      peak = max_ips
+      rss = ruby_results.map { |result| result['rss'] }.max
+      summaries.push({benchmark: benchmark, ruby: ruby, start: start, win_i: win_i, win_t: win_t, wasted: wasted, peak: peak, rss: rss, results: ruby_results})
+    end
+  end
+
+  File.open(report_file, 'w') do |file|
+    file.puts "<!doctype html>"
+    file.puts "<html>"
+    file.puts "<head>"
+    file.puts '<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" integrity="sha384-JcKb8q3iqJ61gNV9KGb8thSsNjpSL0n8PARn9HuZOnIxN0hoP+VmmDGMN5t9UJ0Z" crossorigin="anonymous">'
+    file.puts "</head>"
+    file.puts "<body>"
+    file.puts "<div class='container'>"
+
+    benchmarks.each do |benchmark|
+      file.puts "<h2>#{benchmark}</h2>"
+      file.puts "<table  class='table'>"
+      file.puts "<thead>"
+      file.puts "<th></th>"
+      file.puts "<th>Peak</th>"
+      file.puts "<th>Startup Latency</th>"
+      file.puts "<th>Win Iteration</th>"
+      file.puts "<th>Win Time</th>"
+      file.puts "<th>Wasted Iterations</th>"
+      file.puts "<th>RSS</th>"
+      file.puts "<th></th>"
+      file.puts "<th></th>"
+      file.puts "</thead>"
+      benchmark_summaries = summaries.filter { |summary| summary[:benchmark] == benchmark }
+      max_peak = benchmark_summaries.map { |summary| summary[:peak] }.max
+      max_start = benchmark_summaries.map { |summary| summary[:start] }.max
+      max_win_i = benchmark_summaries.map { |summary| summary[:win_i] }.compact.max
+      max_win_t = benchmark_summaries.map { |summary| summary[:win_t] }.compact.max
+      max_wasted = benchmark_summaries.map { |summary| summary[:wasted] }.max
+      min_rss = benchmark_summaries.map { |summary| summary[:rss] }.min
+      max_rss = benchmark_summaries.map { |summary| summary[:rss] }.max
+      rubies.each do |ruby|
+        summary = summaries.find { |summary| summary[:benchmark] == benchmark && summary[:ruby] == ruby }
+        file.puts "<tr>"
+        if summary
+          file.puts "<th>#{ruby}</th>"
+          file.puts "<td style='white-space: nowrap'>#{format_ips(summary[:peak])}</td>"
+          file.puts "<td style='white-space: nowrap'>#{format_time(summary[:start])}</td>"
+          file.puts "<td style='white-space: nowrap'>#{summary[:win_i] ? summary[:win_i].round : '-'}</td>"
+          file.puts "<td style='white-space: nowrap'>#{summary[:win_t] ? format_time(summary[:win_t]) : '-'}</td>"
+          file.puts "<td style='white-space: nowrap'>#{summary[:wasted].round}</td>"
+          file.puts "<td style='white-space: nowrap'>#{format_rss(summary[:rss])}</td>"
+          radar_peak = summary[:peak] / max_peak
+          radar_start = 1 - (summary[:start] / max_start)
+          if max_win_i == 0
+            radar_win_i = 0
+          else
+            radar_win_i = summary[:win_i] ? 1 - (summary[:win_i] / max_win_i) : (ruby == reference_ruby ? 1 : 0)
+          end
+          if max_win_t == 0
+            radar_win_t = 0
+          else
+            radar_win_t = summary[:win_t] ? 1 - (summary[:win_t] / max_win_t) : (ruby == reference_ruby ? 1 : 0)
+          end
+          if max_wasted == 0
+            radar_wasted = 0
+          else
+            radar_wasted = 1 - (summary[:wasted] / max_wasted)
+          end
+          radar_rss = 1 - ((summary[:rss] - min_rss) / (max_rss - min_rss).to_f)
+          p [max_rss, summary[:rss], radar_rss]
+          file.puts "<td>#{spark_radar(radar_peak, radar_start, radar_win_i, radar_win_t, radar_wasted, radar_rss)}</td>"
+          file.puts "<td>#{spark_curve(summary[:results])}</td>"
+        else
+          file.puts "<th></th>"
+          file.puts "<th></th>"
+          file.puts "<th></th>"
+          file.puts "<th></th>"
+          file.puts "<th></th>"
+          file.puts "<th></th>"
+          file.puts "<th></th>"
+          file.puts "<th></th>"
+          file.puts "<th></th>"
+        end
+        file.puts "</tr>"
+      end
+      file.puts "</table>"
+    end
+
+    file.puts "</div>"
+    file.puts "</body>"
+    file.puts "</html>"
+  end
+end
+
+write_report RESULTS, report_file
+
+BENCHMARKS.each do |benchmark|
+  ENV['RADAR_FILTER'] = benchmark.name
+  benchmark.yield_file do |benchmark_file|
+    RUBIES.each do |ruby|
+      command = ruby.run(benchmark_file)
+      line_start = "\r#{benchmark.name}  ×  #{ruby.name}  (#{command})  ...  "
+      print line_start
+      if RESULTS.any? { |result| result['benchmark'] == benchmark.name && result['ruby'] == ruby.name }
+        puts 'cached'
+        write_report RESULTS, report_file
+        next
+      end
+      samples = []
+      start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      IO.popen(command) do |pipe|
+        pid = pipe.pid
+        line = pipe.readline
+        loop do
+          begin
+            line = pipe.readline
+          rescue EOFError
+            exit $?.to_i
+          end
+          time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          elapsed = time - start_time
+          ips = Float(line)
+          rss = Integer(`ps -o rss= -p #{pid}`.chomp) * 1024
+          samples.push({'elapsed' => elapsed, 'ips' => ips, 'rss' => rss})
+          print line_start
+          print "#{format_time(elapsed)} #{format_ips(ips)} #{format_rss(rss)}"
+          if elapsed > time_budget
+            Process.kill 9, pid
+            Process.waitpid pid
+            break
+          end
+        end
+      end
+      puts
+      RESULTS.push({'benchmark' => benchmark.name, 'ruby' => ruby.name, 'samples' => samples})
+      File.write cache_file, JSON.generate(RESULTS)
+      write_report RESULTS, report_file
+    end
+  end
+end

@@ -1,0 +1,27 @@
+#!/usr/bin/env ruby
+
+require 'yaml'
+
+require 'radar-run'
+
+files = []
+
+ARGV.each do |arg|
+  if arg.start_with?('-')
+    $stderr.puts "unknown option #{arg}"
+    exit 1
+  else
+    files.push arg
+  end
+end
+
+files.each do |file|
+  benchmarks = YAML.load(File.read(file))
+  prelude = benchmarks['prelude']
+  loop_count = benchmarks['loop_count']
+  TOPLEVEL_BINDING.eval prelude if prelude
+  benchmarks['benchmark'].each do |name, code|
+    block = TOPLEVEL_BINDING.eval("proc { #{loop_count}.times { #{code} } }")
+    Radar.benchmark name, &block
+  end
+end

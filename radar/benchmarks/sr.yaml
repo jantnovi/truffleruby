@@ -1,0 +1,4 @@
+benchmarks:
+  - file: sr/sr.rb
+  - file: sr/sr-tracing.rb
+  - file: sr/sr-timeout.rb

@@ -1,0 +1,4 @@
+benchmarks:
+  - file: micro/fib.rb
+  - file: micro/mandel.rb
+  - file: micro/richards.rb

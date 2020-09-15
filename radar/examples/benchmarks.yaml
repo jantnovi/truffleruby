@@ -1,0 +1,22 @@
+benchmarks:
+  - file: fib-benchmark.rb
+    benchmarks:
+      - fib-benchmark-x
+      - fib-benchmark
+  - file: fib-bips.rb
+    benchmarks:
+      - fib-bips-1
+      - fib-bips-2
+  - file: fib-bm.rb
+    benchmarks:
+      - fib-bm-x
+      - fib-bm
+  - file: fib-bmbm.rb
+    benchmarks:
+      - fib-bmnm-x
+      - fib-bmbm
+  - driver: fib-driver.yaml
+  - file: fib-measure.rb
+  - file: fib-radar.rb
+  - file: fib-radar-name.rb
+  - file: fib-realtime.rb

@@ -1,0 +1,11 @@
+benchmarks:
+  - file: render/erb.rb
+    benchmarks:
+      - erb-parse
+      - erb-render
+      - erb-parse-render
+  - file: render/liquid.rb
+    benchmarks:
+      - liquid-parse
+      - liquid-render
+      - liquid-parse-render
