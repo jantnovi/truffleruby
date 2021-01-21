@@ -112,6 +112,10 @@ public class Arity {
         return hasKeywordsRest;
     }
 
+    public boolean isAllKeywordsOptional() {
+        return allKeywordsOptional;
+    }
+
     private int computeArityNumber(boolean isProc) {
         int count = getRequired();
 
