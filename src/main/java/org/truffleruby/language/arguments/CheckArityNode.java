@@ -42,7 +42,10 @@ public class CheckArityNode extends RubyContextSourceNode {
     }
 
     private void checkArity(VirtualFrame frame) {
-        final int given = RubyArguments.getArgumentsCount(frame);
+        final int given = valid_given_arguments(
+                frame, arity.hasRest(),
+                arity.isAllKeywordsOptional(),
+                (arity.getPreRequired() == 0));
 
         if (!checkArity(arity, given)) {
             checkFailedProfile.enter();
@@ -59,6 +62,18 @@ public class CheckArityNode extends RubyContextSourceNode {
                         getContext(),
                         coreExceptions().argumentError(given, arity.getRequired(), this));
             }
+        }
+    }
+
+    private int valid_given_arguments(
+            VirtualFrame frame,
+            boolean hasRest,
+            boolean isAllKeywordOptional,
+            boolean zeroPreRequired) {
+        if ((!hasRest) && (isAllKeywordOptional) && (zeroPreRequired)) {
+            return RubyArguments.getArgumentsCountWithoutEmptyHash(frame);
+        } else {
+            return RubyArguments.getArgumentsCount(frame);
         }
     }
 
