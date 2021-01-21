@@ -10,6 +10,7 @@
 package org.truffleruby.language.arguments;
 
 import org.truffleruby.core.array.ArrayUtils;
+import org.truffleruby.core.hash.RubyHash;
 import org.truffleruby.core.proc.RubyProc;
 import org.truffleruby.language.FrameAndVariables;
 import org.truffleruby.language.control.FrameOnStackMarker;
@@ -159,6 +160,23 @@ public final class RubyArguments {
 
     public static int getArgumentsCount(Frame frame) {
         return frame.getArguments().length - RUNTIME_ARGUMENT_COUNT;
+    }
+
+    public static int getArgumentsCountWithoutEmptyHash(Frame frame) {
+        return getArgumentsCount(frame) - RubyArguments.emptyHashInArguments(frame);
+    }
+
+    private static int emptyHashInArguments(Frame frame) {
+        int number_of_arguments = getArgumentsCount(frame);
+        int number_of_empty_hash = 0;
+
+        for (int i = 0; i < number_of_arguments; i++) {
+            Object argument = getArgument(frame, i);
+            if ((argument instanceof RubyHash) && (((RubyHash) argument).size == 0)) {
+                number_of_empty_hash += 1;
+            }
+        }
+        return number_of_empty_hash;
     }
 
     public static Object getArgument(Frame frame, int index) {
