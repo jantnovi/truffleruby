@@ -205,6 +205,18 @@ class Hash
     Primitive.hash_set_default_proc self, proc
   end
 
+  def dig_fetch(key, *remaining_keys)
+    result = self[key]
+    if Primitive.nil?(result)
+      raise KeyError, "key #{key} not found"
+    elsif remaining_keys.empty?
+      return result
+    else
+      raise TypeError, "#{result.class} does not have #dig_fetch method" unless result.respond_to?(:dig_fetch)
+      result.dig_fetch(*remaining_keys)
+    end
+  end
+
   def dig(key, *more)
     result = self[key]
     if Primitive.nil?(result) || more.empty?
