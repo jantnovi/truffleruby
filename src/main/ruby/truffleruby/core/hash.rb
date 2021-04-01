@@ -205,13 +205,23 @@ class Hash
     Primitive.hash_set_default_proc self, proc
   end
 
+  def dig_fetch(key, *more)
+    result = self[key]
+    if Primitive.nil?(result)
+      raise KeyError.new("key not found: #{key.inspect}", :receiver => self, :key => key)
+    elsif more.empty?
+      return result
+    else
+      Truffle::Diggable.dig_fetch(result, more)
+    end
+  end
+
   def dig(key, *more)
     result = self[key]
     if Primitive.nil?(result) || more.empty?
       result
     else
-      raise TypeError, "#{result.class} does not have #dig method" unless result.respond_to?(:dig)
-      result.dig(*more)
+      Truffle::Diggable.dig(result, more)
     end
   end
 

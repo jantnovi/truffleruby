@@ -291,13 +291,23 @@ class Array
     self - other
   end
 
+  def dig_fetch(idx, *more)
+    result = self.at(idx)
+    if Primitive.nil?(result)
+      raise KeyError.new("key not found: #{idx.inspect}", :receiver => self, :key => idx)
+    elsif more.empty?
+      return result
+    else
+      Truffle::Diggable.dig_fetch(result, more)
+    end
+  end
+
   def dig(idx, *more)
     result = self.at(idx)
     if Primitive.nil?(result) || more.empty?
       result
     else
-      raise TypeError, "#{result.class} does not have #dig method" unless result.respond_to?(:dig)
-      result.dig(*more)
+      Truffle::Diggable.dig(result, more)
     end
   end
 
